@@ -43,6 +43,18 @@ Send once manually:
 codex-autocontinue send --session codex --dir /path/to/project
 ```
 
+Tail-like real-time output (no attach needed):
+
+```bash
+codex-autocontinue tail --session codex --lines 200
+```
+
+If your terminal rendering requires original control sequences:
+
+```bash
+codex-autocontinue tail --session codex --raw
+```
+
 Check status:
 
 ```bash
@@ -67,6 +79,7 @@ codex-autocontinue schedule-remove --session codex
 bootstrap         Start if needed, then install schedule
 start             Start detached tmux session and run Codex command
 send              Send text (default: continue) to an existing tmux session
+tail              Stream pane output in real time (tail-like)
 attach            Attach to tmux session
 status            Show tmux + scheduler status
 schedule-install  Install systemd/cron schedule
@@ -80,6 +93,9 @@ help              Show help
 - `--session <name>`: tmux session name, default `codex`
 - `--dir <path>`: working directory to cd before sending/starting
 - `--text <text>`: send content, default `continue`
+- `--pane <target>`: tmux pane target (for `tail`), default `<session>:0.0`
+- `--lines <n>`: backlog line count for `tail`, default `120`
+- `--raw`: keep raw ANSI control sequences for `tail`
 - `--resume-id <id>`: for default start command
 - `--cmd <command>`: override start command
 - `--scheduler systemd|cron|all`: scheduler backend (default `systemd`)
@@ -120,6 +136,14 @@ Install both systemd + cron:
 
 ```bash
 codex-autocontinue schedule-install --scheduler all --session codex --dir /path/to/project
+```
+
+Help:
+
+```bash
+codex-autocontinue --help
+codex-autocontinue start --help
+codex-autocontinue help schedule-install
 ```
 
 ## Notes

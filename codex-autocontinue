@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 DEFAULT_SESSION="codex"
 DEFAULT_TEXT="continue"
 DEFAULT_SCHEDULER="systemd"
@@ -21,22 +21,27 @@ codex-autocontinue: keep Codex sessions alive in tmux and schedule periodic "con
 
 Usage:
   codex-autocontinue <command> [options]
+  codex-autocontinue help [command]
 
 Commands:
   bootstrap         Start (if needed) and install auto-send schedule in one step
   start             Start a detached tmux session and run Codex resume command
   send              Send text (default: continue) to an existing tmux session
+  tail              Stream pane output in real time (tail-like)
   attach            Attach to tmux session
   status            Show tmux and scheduler status
   schedule-install  Install periodic auto-send job (default scheduler: systemd)
   schedule-remove   Remove periodic auto-send job
   version           Print version
-  help              Show this help
+  help              Show global help or subcommand help
 
 Common options:
   --session <name>      tmux session name (default: codex)
   --dir <path>          working directory to enter before sending/starting (default: current dir)
   --text <text>         message to send (default: continue)
+  --pane <target>       tmux pane target, default: <session>:0.0
+  --lines <n>           number of backlog lines for tail command (default: 120)
+  --raw                 for tail command: keep raw ANSI control sequences
 
 start options:
   --resume-id <id>      resume id used by default command
@@ -52,9 +57,173 @@ Examples:
   codex-autocontinue bootstrap --dir /path/to/project --resume-id xxxx
   codex-autocontinue start --dir /path/to/project --resume-id xxxx
   codex-autocontinue send --session codex --dir /path/to/project
+  codex-autocontinue tail --session codex --lines 200
   codex-autocontinue schedule-install --session codex --dir /path/to/project
   codex-autocontinue schedule-install --scheduler cron --cron-expr "*/15 * * * *"
+  codex-autocontinue start --help
+  codex-autocontinue help schedule-install
 USAGE
+}
+
+usage_bootstrap() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue bootstrap [common options] [start options] [schedule options]
+
+Behavior:
+  - If tmux session exists: skip start, only install/update schedule.
+  - If session does not exist: run start, then install schedule.
+
+Common options:
+  --session <name>      tmux session name (default: codex)
+  --dir <path>          working directory (default: current dir)
+  --text <text>         message to send (default: continue)
+
+Start options:
+  --resume-id <id>      resume id for default codex start command
+  --cmd <command>       custom start command (overrides default)
+
+Schedule options:
+  --scheduler <type>    systemd | cron | all (default: systemd)
+  --on-calendar <expr>  systemd timer expression (default: *:0/30)
+  --cron-expr <expr>    cron expression (default: 0,30 * * * *)
+  --log-file <path>     cron log output path
+USAGE
+}
+
+usage_start() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue start [common options] [start options]
+
+Common options:
+  --session <name>      tmux session name (default: codex)
+  --dir <path>          working directory (default: current dir)
+
+Start options:
+  --resume-id <id>      resume id for default codex start command
+  --cmd <command>       custom start command (overrides default)
+
+Notes:
+  - Requires either --resume-id or --cmd.
+  - Fails if session already exists.
+USAGE
+}
+
+usage_send() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue send [common options]
+
+Common options:
+  --session <name>      tmux session name (default: codex)
+  --dir <path>          directory to cd before sending text
+  --text <text>         text to send (default: continue)
+USAGE
+}
+
+usage_tail() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue tail [options]
+
+Options:
+  --session <name>      tmux session name (default: codex)
+  --pane <target>       tmux pane target (default: <session>:0.0)
+  --lines <n>           backlog lines to print before follow (default: 120)
+  --raw                 keep raw ANSI control sequences
+USAGE
+}
+
+usage_attach() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue attach [--session <name>]
+
+Options:
+  --session <name>      tmux session name (default: codex)
+USAGE
+}
+
+usage_status() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue status [--session <name>]
+
+Options:
+  --session <name>      tmux session name (default: codex)
+USAGE
+}
+
+usage_schedule_install() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue schedule-install [common options] [schedule options]
+
+Common options:
+  --session <name>      tmux session name (default: codex)
+  --dir <path>          directory for send command (required to exist)
+  --text <text>         text to send (default: continue)
+
+Schedule options:
+  --scheduler <type>    systemd | cron | all (default: systemd)
+  --on-calendar <expr>  systemd timer expression (default: *:0/30)
+  --cron-expr <expr>    cron expression (default: 0,30 * * * *)
+  --log-file <path>     cron log output path
+USAGE
+}
+
+usage_schedule_remove() {
+  cat << 'USAGE'
+Usage:
+  codex-autocontinue schedule-remove [--session <name>] [--scheduler <type>]
+
+Options:
+  --session <name>      tmux session name (default: codex)
+  --scheduler <type>    systemd | cron | all (default: systemd)
+USAGE
+}
+
+show_help_for_command() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    ""|help)
+      usage
+      ;;
+    bootstrap)
+      usage_bootstrap
+      ;;
+    start)
+      usage_start
+      ;;
+    send)
+      usage_send
+      ;;
+    tail)
+      usage_tail
+      ;;
+    attach)
+      usage_attach
+      ;;
+    status)
+      usage_status
+      ;;
+    schedule-install)
+      usage_schedule_install
+      ;;
+    schedule-remove)
+      usage_schedule_remove
+      ;;
+    version)
+      cat << 'USAGE'
+Usage:
+  codex-autocontinue version
+USAGE
+      ;;
+    *)
+      die "Unknown command for help: $cmd"
+      ;;
+  esac
 }
 
 die() {
@@ -164,6 +333,36 @@ bootstrap() {
   fi
 
   schedule_install
+}
+
+tail_session() {
+  require_cmd tmux
+  session_exists_or_die
+  mkdir -p "$STATE_DIR"
+  [[ "$TAIL_LINES" =~ ^[0-9]+$ ]] || die "--lines must be a non-negative integer"
+
+  local pane_target pipe_file pipe_cmd
+  pane_target="${PANE:-${SESSION}:0.0}"
+  pipe_file="${STATE_DIR}/tail-$(safe_id "$SESSION").log"
+
+  : > "$pipe_file"
+  tmux capture-pane -pt "$pane_target" -S "-$TAIL_LINES"
+
+  # Reset existing pipe first, then stream new pane output to a file and tail it.
+  tmux pipe-pane -t "$pane_target" >/dev/null 2>&1 || true
+  printf -v pipe_cmd 'cat >> %q' "$pipe_file"
+  tmux pipe-pane -O -t "$pane_target" "$pipe_cmd"
+  note "Following pane '$pane_target' (Ctrl+C to stop)"
+
+  trap 'tmux pipe-pane -t "$pane_target" >/dev/null 2>&1 || true; exit 0' INT TERM
+  if [[ "$TAIL_RAW" == "1" ]]; then
+    tail -f "$pipe_file"
+  elif command -v perl >/dev/null 2>&1; then
+    tail -f "$pipe_file" | perl -pe 's/\e\[[0-9;?]*[ -\/]*[@-~]//g; s/\r//g;'
+  else
+    note "perl not found, falling back to raw output"
+    tail -f "$pipe_file"
+  fi
 }
 
 attach_session() {
@@ -315,12 +514,30 @@ schedule_remove() {
   esac
 }
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "${1:-}" == "-v" || "${1:-}" == "--version" ]]; then
+  echo "$VERSION"
+  exit 0
+fi
+
 COMMAND="${1:-}"
 if [[ -z "$COMMAND" ]]; then
   usage
   exit 1
 fi
 shift || true
+
+if [[ "$COMMAND" == "help" ]]; then
+  if [[ $# -gt 1 ]]; then
+    die "help accepts at most one command"
+  fi
+  show_help_for_command "${1:-}"
+  exit 0
+fi
 
 SESSION="$DEFAULT_SESSION"
 DIR="$PWD"
@@ -331,6 +548,10 @@ START_CMD=""
 ON_CALENDAR="$DEFAULT_ON_CALENDAR"
 CRON_EXPR="$DEFAULT_CRON_EXPR"
 LOG_FILE=""
+SHOW_HELP="0"
+PANE=""
+TAIL_LINES="120"
+TAIL_RAW="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -348,6 +569,20 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "Missing value for --text"
       TEXT="$2"
       shift 2
+      ;;
+    --pane)
+      [[ $# -ge 2 ]] || die "Missing value for --pane"
+      PANE="$2"
+      shift 2
+      ;;
+    --lines)
+      [[ $# -ge 2 ]] || die "Missing value for --lines"
+      TAIL_LINES="$2"
+      shift 2
+      ;;
+    --raw)
+      TAIL_RAW="1"
+      shift
       ;;
     --scheduler)
       [[ $# -ge 2 ]] || die "Missing value for --scheduler"
@@ -380,8 +615,8 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      usage
-      exit 0
+      SHOW_HELP="1"
+      shift
       ;;
     *)
       die "Unknown argument: $1"
@@ -394,6 +629,11 @@ if [[ -z "$LOG_FILE" ]]; then
   LOG_FILE="${STATE_DIR}/$(safe_id "$SESSION").log"
 fi
 
+if [[ "$SHOW_HELP" == "1" ]]; then
+  show_help_for_command "$COMMAND"
+  exit 0
+fi
+
 case "$COMMAND" in
   bootstrap)
     bootstrap
@@ -403,6 +643,9 @@ case "$COMMAND" in
     ;;
   send)
     send_text
+    ;;
+  tail)
+    tail_session
     ;;
   attach)
     attach_session
@@ -418,9 +661,6 @@ case "$COMMAND" in
     ;;
   version)
     echo "$VERSION"
-    ;;
-  help)
-    usage
     ;;
   *)
     die "Unknown command: $COMMAND"
