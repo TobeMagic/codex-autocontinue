@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 DEFAULT_SESSION="codex"
-DEFAULT_TEXT="continue"
+DEFAULT_TEXT="继续"
 DEFAULT_SCHEDULER="systemd"
 DEFAULT_ON_CALENDAR="*:0/30"
 DEFAULT_CRON_EXPR="0,30 * * * *"
+DEFAULT_INITIAL_DELAY="1"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/codex-autocontinue"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
@@ -17,7 +18,7 @@ fi
 
 usage() {
   cat << 'USAGE'
-codex-autocontinue: keep Codex sessions alive in tmux and schedule periodic "continue"
+codex-autocontinue: keep Codex sessions alive in tmux and schedule periodic "继续"
 
 Usage:
   codex-autocontinue <command> [options]
@@ -26,7 +27,7 @@ Usage:
 Commands:
   bootstrap         Start (if needed) and install auto-send schedule in one step
   start             Start a detached tmux session and run Codex resume command
-  send              Send text (default: continue) to an existing tmux session
+  send              Send text (default: 继续) to an existing tmux session
   tail              Stream pane output in real time (tail-like)
   attach            Attach to tmux session
   status            Show tmux and scheduler status
@@ -37,8 +38,8 @@ Commands:
 
 Common options:
   --session <name>      tmux session name (default: codex)
-  --dir <path>          working directory to enter before sending/starting (default: current dir)
-  --text <text>         message to send (default: continue)
+  --dir <path>          working directory for start/schedule context (default: current dir)
+  --text <text>         message to send (default: 继续, can set continue)
   --pane <target>       tmux pane target, default: <session>:0.0
   --lines <n>           number of backlog lines for tail command (default: 120)
   --raw                 for tail command: keep raw ANSI control sequences
@@ -46,6 +47,8 @@ Common options:
 start options:
   --resume-id <id>      resume id used by default command
   --cmd <command>       custom start command (overrides default command)
+  --no-initial-send     do not send initial text after start
+  --initial-delay <sec> delay before initial send after start (default: 1)
 
 schedule options:
   --scheduler <type>    systemd | cron | all (default: systemd)
@@ -77,11 +80,13 @@ Behavior:
 Common options:
   --session <name>      tmux session name (default: codex)
   --dir <path>          working directory (default: current dir)
-  --text <text>         message to send (default: continue)
+  --text <text>         message to send (default: 继续, can set continue)
 
 Start options:
   --resume-id <id>      resume id for default codex start command
   --cmd <command>       custom start command (overrides default)
+  --no-initial-send     do not send initial text after start
+  --initial-delay <sec> delay before initial send after start (default: 1)
 
 Schedule options:
   --scheduler <type>    systemd | cron | all (default: systemd)
@@ -103,6 +108,8 @@ Common options:
 Start options:
   --resume-id <id>      resume id for default codex start command
   --cmd <command>       custom start command (overrides default)
+  --no-initial-send     do not send initial text after start
+  --initial-delay <sec> delay before initial send after start (default: 1)
 
 Notes:
   - Requires either --resume-id or --cmd.
@@ -117,8 +124,8 @@ Usage:
 
 Common options:
   --session <name>      tmux session name (default: codex)
-  --dir <path>          directory to cd before sending text
-  --text <text>         text to send (default: continue)
+  --dir <path>          directory context check before sending text
+  --text <text>         text to send (default: 继续, can set continue)
 USAGE
 }
 
@@ -163,7 +170,7 @@ Usage:
 Common options:
   --session <name>      tmux session name (default: codex)
   --dir <path>          directory for send command (required to exist)
-  --text <text>         text to send (default: continue)
+  --text <text>         text to send (default: 继续, can set continue)
 
 Schedule options:
   --scheduler <type>    systemd | cron | all (default: systemd)
@@ -297,7 +304,6 @@ send_text() {
   ensure_dir_exists
   session_exists_or_die
 
-  tmux send-keys -t "$SESSION" "cd $(printf '%q' "$DIR")" ENTER
   tmux send-keys -t "$SESSION" "$TEXT" ENTER
   note "Sent text to session '$SESSION': $TEXT"
 }
@@ -320,6 +326,15 @@ start_session() {
 
   tmux new-session -d -s "$SESSION" -c "$DIR" "$run_cmd"
   note "Started tmux session '$SESSION' in '$DIR'"
+
+  sleep "$INITIAL_DELAY"
+  if ! tmux_has_session "$SESSION"; then
+    die "tmux session '$SESSION' exited right after start"
+  fi
+  if [[ "$INITIAL_SEND" == "1" ]]; then
+    tmux send-keys -t "$SESSION" "$TEXT" ENTER
+    note "Sent initial text to session '$SESSION': $TEXT"
+  fi
 }
 
 bootstrap() {
@@ -552,6 +567,8 @@ SHOW_HELP="0"
 PANE=""
 TAIL_LINES="120"
 TAIL_RAW="0"
+INITIAL_SEND="1"
+INITIAL_DELAY="$DEFAULT_INITIAL_DELAY"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -568,6 +585,15 @@ while [[ $# -gt 0 ]]; do
     --text)
       [[ $# -ge 2 ]] || die "Missing value for --text"
       TEXT="$2"
+      shift 2
+      ;;
+    --no-initial-send)
+      INITIAL_SEND="0"
+      shift
+      ;;
+    --initial-delay)
+      [[ $# -ge 2 ]] || die "Missing value for --initial-delay"
+      INITIAL_DELAY="$2"
       shift 2
       ;;
     --pane)
@@ -625,6 +651,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$SESSION" ]] || die "Session name cannot be empty"
+if ! [[ "$INITIAL_DELAY" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  die "--initial-delay must be a non-negative number"
+fi
 if [[ -z "$LOG_FILE" ]]; then
   LOG_FILE="${STATE_DIR}/$(safe_id "$SESSION").log"
 fi

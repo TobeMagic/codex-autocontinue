@@ -1,6 +1,6 @@
 # codex-autocontinue
 
-Manage Codex `tmux` sessions and auto-send `continue` on a schedule.
+Manage Codex `tmux` sessions and auto-send `继续` on a schedule.
 
 - Command name: `codex-autocontinue`
 - Alias: `codex-continue`
@@ -24,6 +24,7 @@ codex-autocontinue bootstrap --session codex --dir /path/to/project --resume-id 
 ```
 
 If session already exists, `bootstrap` skips start and only installs/updates the schedule.
+If session is newly started, it auto-sends one text immediately (default: `继续`).
 
 Start only (no schedule change):
 
@@ -41,6 +42,12 @@ Send once manually:
 
 ```bash
 codex-autocontinue send --session codex --dir /path/to/project
+```
+
+Send English text:
+
+```bash
+codex-autocontinue send --session codex --text continue
 ```
 
 Tail-like real-time output (no attach needed):
@@ -78,7 +85,7 @@ codex-autocontinue schedule-remove --session codex
 ```text
 bootstrap         Start if needed, then install schedule
 start             Start detached tmux session and run Codex command
-send              Send text (default: continue) to an existing tmux session
+send              Send text (default: 继续) to an existing tmux session
 tail              Stream pane output in real time (tail-like)
 attach            Attach to tmux session
 status            Show tmux + scheduler status
@@ -91,8 +98,10 @@ help              Show help
 ## Key options
 
 - `--session <name>`: tmux session name, default `codex`
-- `--dir <path>`: working directory to cd before sending/starting
-- `--text <text>`: send content, default `continue`
+- `--dir <path>`: working directory for session start and scheduler context
+- `--text <text>`: send content, default `继续` (you can set `continue`)
+- `--no-initial-send`: disable auto-send right after `start/bootstrap`
+- `--initial-delay <sec>`: delay before auto-send after start, default `1`
 - `--pane <target>`: tmux pane target (for `tail`), default `<session>:0.0`
 - `--lines <n>`: backlog line count for `tail`, default `120`
 - `--raw`: keep raw ANSI control sequences for `tail`
