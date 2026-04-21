@@ -1,0 +1,410 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+DEFAULT_SESSION="codex"
+DEFAULT_TEXT="continue"
+DEFAULT_SCHEDULER="systemd"
+DEFAULT_ON_CALENDAR="*:0/30"
+DEFAULT_CRON_EXPR="0,30 * * * *"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/codex-autocontinue"
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || true)"
+if [[ -z "$SCRIPT_PATH" ]]; then
+  SCRIPT_PATH="$0"
+fi
+
+usage() {
+  cat << 'USAGE'
+codex-autocontinue: keep Codex sessions alive in tmux and schedule periodic "continue"
+
+Usage:
+  codex-autocontinue <command> [options]
+
+Commands:
+  start             Start a detached tmux session and run Codex resume command
+  send              Send text (default: continue) to an existing tmux session
+  attach            Attach to tmux session
+  status            Show tmux and scheduler status
+  schedule-install  Install periodic auto-send job (default scheduler: systemd)
+  schedule-remove   Remove periodic auto-send job
+  version           Print version
+  help              Show this help
+
+Common options:
+  --session <name>      tmux session name (default: codex)
+  --dir <path>          working directory to enter before sending/starting (default: current dir)
+  --text <text>         message to send (default: continue)
+
+start options:
+  --resume-id <id>      resume id used by default command
+  --cmd <command>       custom start command (overrides default command)
+
+schedule options:
+  --scheduler <type>    systemd | cron | all (default: systemd)
+  --on-calendar <expr>  systemd OnCalendar expression (default: *:0/30)
+  --cron-expr <expr>    cron expression (default: 0,30 * * * *)
+  --log-file <path>     log file for cron execution
+
+Examples:
+  codex-autocontinue start --dir /path/to/project --resume-id xxxx
+  codex-autocontinue send --session codex --dir /path/to/project
+  codex-autocontinue schedule-install --session codex --dir /path/to/project
+  codex-autocontinue schedule-install --scheduler cron --cron-expr "*/15 * * * *"
+USAGE
+}
+
+die() {
+  echo "[codex-autocontinue] ERROR: $*" >&2
+  exit 1
+}
+
+note() {
+  echo "[codex-autocontinue] $*"
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+}
+
+safe_id() {
+  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
+}
+
+cron_marker() {
+  local sid
+  sid="$(safe_id "$1")"
+  printf '# codex-autocontinue:%s' "$sid"
+}
+
+tmux_has_session() {
+  tmux has-session -t "$1" >/dev/null 2>&1
+}
+
+session_exists_or_die() {
+  if ! tmux_has_session "$SESSION"; then
+    die "tmux session '$SESSION' not found"
+  fi
+}
+
+ensure_dir_exists() {
+  [[ -d "$DIR" ]] || die "Directory does not exist: $DIR"
+}
+
+ensure_systemd_user_available() {
+  require_cmd systemctl
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    die "systemd --user unavailable in current environment"
+  fi
+}
+
+get_unit_names() {
+  local sid
+  sid="$(safe_id "$SESSION")"
+  SERVICE_UNIT="codex-autocontinue-${sid}.service"
+  TIMER_UNIT="codex-autocontinue-${sid}.timer"
+  RUNNER_SCRIPT="${STATE_DIR}/runner-${sid}.sh"
+  SERVICE_FILE="${SYSTEMD_USER_DIR}/${SERVICE_UNIT}"
+  TIMER_FILE="${SYSTEMD_USER_DIR}/${TIMER_UNIT}"
+}
+
+make_runner_script() {
+  mkdir -p "$STATE_DIR"
+  local exec_line
+  printf -v exec_line '%q ' "$SCRIPT_PATH" send --session "$SESSION" --dir "$DIR" --text "$TEXT"
+  cat > "$RUNNER_SCRIPT" << EOF_RUNNER
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${exec_line}
+EOF_RUNNER
+  chmod +x "$RUNNER_SCRIPT"
+}
+
+send_text() {
+  require_cmd tmux
+  ensure_dir_exists
+  session_exists_or_die
+
+  tmux send-keys -t "$SESSION" "cd $(printf '%q' "$DIR")" ENTER
+  tmux send-keys -t "$SESSION" "$TEXT" ENTER
+  note "Sent text to session '$SESSION': $TEXT"
+}
+
+start_session() {
+  require_cmd tmux
+  ensure_dir_exists
+
+  if tmux_has_session "$SESSION"; then
+    die "tmux session '$SESSION' already exists"
+  fi
+
+  local run_cmd
+  if [[ -n "$START_CMD" ]]; then
+    run_cmd="$START_CMD"
+  else
+    [[ -n "$RESUME_ID" ]] || die "start requires --resume-id (or provide --cmd)"
+    run_cmd="codex --dangerously-bypass-approvals-and-sandbox resume $(printf '%q' "$RESUME_ID")"
+  fi
+
+  tmux new-session -d -s "$SESSION" -c "$DIR" "$run_cmd"
+  note "Started tmux session '$SESSION' in '$DIR'"
+}
+
+attach_session() {
+  require_cmd tmux
+  session_exists_or_die
+  exec tmux attach -t "$SESSION"
+}
+
+status() {
+  require_cmd tmux
+  get_unit_names
+
+  if tmux_has_session "$SESSION"; then
+    note "tmux session '$SESSION': running"
+  else
+    note "tmux session '$SESSION': not found"
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    local enabled active
+    enabled="$(systemctl --user is-enabled "$TIMER_UNIT" 2>/dev/null || true)"
+    active="$(systemctl --user is-active "$TIMER_UNIT" 2>/dev/null || true)"
+    if [[ -n "$enabled" || -n "$active" ]]; then
+      note "systemd timer '$TIMER_UNIT': enabled=${enabled:-unknown}, active=${active:-unknown}"
+    else
+      note "systemd timer '$TIMER_UNIT': not configured"
+    fi
+  else
+    note "systemctl not found"
+  fi
+
+  local marker
+  marker="$(cron_marker "$SESSION")"
+  if crontab -l 2>/dev/null | grep -F "$marker" >/dev/null 2>&1; then
+    note "cron job: configured ($marker)"
+  else
+    note "cron job: not configured ($marker)"
+  fi
+}
+
+install_systemd() {
+  ensure_systemd_user_available
+  get_unit_names
+  make_runner_script
+  mkdir -p "$SYSTEMD_USER_DIR"
+
+  cat > "$SERVICE_FILE" << EOF_SERVICE
+[Unit]
+Description=Codex autocontinue service for tmux session ${SESSION}
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=${RUNNER_SCRIPT}
+EOF_SERVICE
+
+  cat > "$TIMER_FILE" << EOF_TIMER
+[Unit]
+Description=Codex autocontinue timer for tmux session ${SESSION}
+
+[Timer]
+OnCalendar=${ON_CALENDAR}
+Persistent=true
+Unit=${SERVICE_UNIT}
+
+[Install]
+WantedBy=timers.target
+EOF_TIMER
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$TIMER_UNIT"
+  note "Installed systemd timer '$TIMER_UNIT' with OnCalendar=${ON_CALENDAR}"
+}
+
+remove_systemd() {
+  ensure_systemd_user_available
+  get_unit_names
+
+  systemctl --user disable --now "$TIMER_UNIT" >/dev/null 2>&1 || true
+  rm -f "$TIMER_FILE" "$SERVICE_FILE" "$RUNNER_SCRIPT"
+  systemctl --user daemon-reload
+  note "Removed systemd timer '$TIMER_UNIT'"
+}
+
+install_cron() {
+  require_cmd crontab
+  mkdir -p "$STATE_DIR"
+  mkdir -p "$(dirname "$LOG_FILE")"
+
+  local marker line tmp
+  marker="$(cron_marker "$SESSION")"
+  printf -v line '%s %q send --session %q --dir %q --text %q >> %q 2>&1 %s' \
+    "$CRON_EXPR" "$SCRIPT_PATH" "$SESSION" "$DIR" "$TEXT" "$LOG_FILE" "$marker"
+
+  tmp="$(mktemp)"
+  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp"
+  echo "$line" >> "$tmp"
+  crontab "$tmp"
+  rm -f "$tmp"
+
+  note "Installed cron schedule '$CRON_EXPR' for session '$SESSION'"
+}
+
+remove_cron() {
+  require_cmd crontab
+  local marker tmp
+  marker="$(cron_marker "$SESSION")"
+  tmp="$(mktemp)"
+  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp"
+  crontab "$tmp"
+  rm -f "$tmp"
+  note "Removed cron schedule for session '$SESSION'"
+}
+
+schedule_install() {
+  ensure_dir_exists
+  case "$SCHEDULER" in
+    systemd)
+      install_systemd
+      ;;
+    cron)
+      install_cron
+      ;;
+    all)
+      install_systemd
+      install_cron
+      ;;
+    *)
+      die "Invalid --scheduler value: $SCHEDULER"
+      ;;
+  esac
+}
+
+schedule_remove() {
+  case "$SCHEDULER" in
+    systemd)
+      remove_systemd
+      ;;
+    cron)
+      remove_cron
+      ;;
+    all)
+      remove_systemd
+      remove_cron
+      ;;
+    *)
+      die "Invalid --scheduler value: $SCHEDULER"
+      ;;
+  esac
+}
+
+COMMAND="${1:-}"
+if [[ -z "$COMMAND" ]]; then
+  usage
+  exit 1
+fi
+shift || true
+
+SESSION="$DEFAULT_SESSION"
+DIR="$PWD"
+TEXT="$DEFAULT_TEXT"
+SCHEDULER="$DEFAULT_SCHEDULER"
+RESUME_ID=""
+START_CMD=""
+ON_CALENDAR="$DEFAULT_ON_CALENDAR"
+CRON_EXPR="$DEFAULT_CRON_EXPR"
+LOG_FILE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --session)
+      [[ $# -ge 2 ]] || die "Missing value for --session"
+      SESSION="$2"
+      shift 2
+      ;;
+    --dir)
+      [[ $# -ge 2 ]] || die "Missing value for --dir"
+      DIR="$2"
+      shift 2
+      ;;
+    --text)
+      [[ $# -ge 2 ]] || die "Missing value for --text"
+      TEXT="$2"
+      shift 2
+      ;;
+    --scheduler)
+      [[ $# -ge 2 ]] || die "Missing value for --scheduler"
+      SCHEDULER="$2"
+      shift 2
+      ;;
+    --resume-id)
+      [[ $# -ge 2 ]] || die "Missing value for --resume-id"
+      RESUME_ID="$2"
+      shift 2
+      ;;
+    --cmd)
+      [[ $# -ge 2 ]] || die "Missing value for --cmd"
+      START_CMD="$2"
+      shift 2
+      ;;
+    --on-calendar)
+      [[ $# -ge 2 ]] || die "Missing value for --on-calendar"
+      ON_CALENDAR="$2"
+      shift 2
+      ;;
+    --cron-expr)
+      [[ $# -ge 2 ]] || die "Missing value for --cron-expr"
+      CRON_EXPR="$2"
+      shift 2
+      ;;
+    --log-file)
+      [[ $# -ge 2 ]] || die "Missing value for --log-file"
+      LOG_FILE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$SESSION" ]] || die "Session name cannot be empty"
+if [[ -z "$LOG_FILE" ]]; then
+  LOG_FILE="${STATE_DIR}/$(safe_id "$SESSION").log"
+fi
+
+case "$COMMAND" in
+  start)
+    start_session
+    ;;
+  send)
+    send_text
+    ;;
+  attach)
+    attach_session
+    ;;
+  status)
+    status
+    ;;
+  schedule-install)
+    schedule_install
+    ;;
+  schedule-remove)
+    schedule_remove
+    ;;
+  version)
+    echo "$VERSION"
+    ;;
+  help)
+    usage
+    ;;
+  *)
+    die "Unknown command: $COMMAND"
+    ;;
+esac
