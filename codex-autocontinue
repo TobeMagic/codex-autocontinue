@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 DEFAULT_SESSION="codex"
 DEFAULT_TEXT="continue"
 DEFAULT_SCHEDULER="systemd"
@@ -23,6 +23,7 @@ Usage:
   codex-autocontinue <command> [options]
 
 Commands:
+  bootstrap         Start (if needed) and install auto-send schedule in one step
   start             Start a detached tmux session and run Codex resume command
   send              Send text (default: continue) to an existing tmux session
   attach            Attach to tmux session
@@ -48,6 +49,7 @@ schedule options:
   --log-file <path>     log file for cron execution
 
 Examples:
+  codex-autocontinue bootstrap --dir /path/to/project --resume-id xxxx
   codex-autocontinue start --dir /path/to/project --resume-id xxxx
   codex-autocontinue send --session codex --dir /path/to/project
   codex-autocontinue schedule-install --session codex --dir /path/to/project
@@ -151,6 +153,19 @@ start_session() {
   note "Started tmux session '$SESSION' in '$DIR'"
 }
 
+bootstrap() {
+  require_cmd tmux
+  ensure_dir_exists
+
+  if tmux_has_session "$SESSION"; then
+    note "tmux session '$SESSION' already exists, skipping start"
+  else
+    start_session
+  fi
+
+  schedule_install
+}
+
 attach_session() {
   require_cmd tmux
   session_exists_or_die
@@ -244,7 +259,7 @@ install_cron() {
     "$CRON_EXPR" "$SCRIPT_PATH" "$SESSION" "$DIR" "$TEXT" "$LOG_FILE" "$marker"
 
   tmp="$(mktemp)"
-  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp"
+  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp" || true
   echo "$line" >> "$tmp"
   crontab "$tmp"
   rm -f "$tmp"
@@ -257,7 +272,7 @@ remove_cron() {
   local marker tmp
   marker="$(cron_marker "$SESSION")"
   tmp="$(mktemp)"
-  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp"
+  (crontab -l 2>/dev/null || true) | grep -F -v "$marker" > "$tmp" || true
   crontab "$tmp"
   rm -f "$tmp"
   note "Removed cron schedule for session '$SESSION'"
@@ -380,6 +395,9 @@ if [[ -z "$LOG_FILE" ]]; then
 fi
 
 case "$COMMAND" in
+  bootstrap)
+    bootstrap
+    ;;
   start)
     start_session
     ;;

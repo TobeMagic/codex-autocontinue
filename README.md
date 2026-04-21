@@ -17,7 +17,15 @@ cd codex-autocontinue
 
 ## Quick start
 
-Start a detached tmux session in a target project and run Codex resume:
+One command bootstrap (start + schedule-install):
+
+```bash
+codex-autocontinue bootstrap --session codex --dir /path/to/project --resume-id xxxx
+```
+
+If session already exists, `bootstrap` skips start and only installs/updates the schedule.
+
+Start only (no schedule change):
 
 ```bash
 codex-autocontinue start --session codex --dir /path/to/project --resume-id xxxx
@@ -56,6 +64,7 @@ codex-autocontinue schedule-remove --session codex
 ## Commands
 
 ```text
+bootstrap         Start if needed, then install schedule
 start             Start detached tmux session and run Codex command
 send              Send text (default: continue) to an existing tmux session
 attach            Attach to tmux session
@@ -84,6 +93,17 @@ Custom start command:
 
 ```bash
 codex-autocontinue start --session codex --dir /path/to/project --cmd "codex resume abc123"
+```
+
+Bootstrap with custom scheduler:
+
+```bash
+codex-autocontinue bootstrap \
+  --session codex \
+  --dir /path/to/project \
+  --resume-id xxxx \
+  --scheduler cron \
+  --cron-expr "*/15 * * * *"
 ```
 
 Cron every 15 minutes:
