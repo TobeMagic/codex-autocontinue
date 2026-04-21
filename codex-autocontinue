@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.4.1"
 DEFAULT_SESSION="codex"
 DEFAULT_TEXT="继续"
 DEFAULT_SCHEDULER="systemd"
 DEFAULT_ON_CALENDAR="*:0/30"
 DEFAULT_CRON_EXPR="0,30 * * * *"
 DEFAULT_INITIAL_DELAY="1"
+
+# systemd --user often has a minimal PATH; include common user bin dirs so tmux/codex are discoverable.
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/codex-autocontinue"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
